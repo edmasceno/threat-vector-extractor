@@ -738,31 +738,47 @@ class SafeVectorAnalyzer:
                     
                     # Identificação de V8 Bytenode via assinatura binária
                     if len(data) > 4 and data[2:4] == b'\xde\xc0':
-                        kind = "v8_bytecode_compilado"
-                        nova_extensao = ".v8c"
                         self.results["threat_intel"]["is_suspected_vector"] = True
                         
                         # Extração bruta de strings legíveis para hunting de IoCs
                         printable = set(string.printable.encode('ascii'))
+                        strings_found = []
                         current_string = bytearray()
+                        
                         for byte in data:
                             if byte in printable:
                                 current_string.append(byte)
                             else:
-                                if len(current_string) >= 15:
-                                    s = current_string.decode('ascii', 'ignore')
-                                    if any(kw in s.lower() for kw in ["http", "discord", "api", "webhook"]):
-                                        entry = {"source_file": f.name, "extracted_string": s}
-                                        if entry not in self.results["deep_analysis"]["recovered_obfuscated_strings"]:
-                                            self.results["deep_analysis"]["recovered_obfuscated_strings"].append(entry)
+                                if len(current_string) >= 10:
+                                    strings_found.append(current_string.decode('ascii', 'ignore'))
                                 current_string = bytearray()
-                        if len(current_string) >= 15:
-                            s = current_string.decode('ascii', 'ignore')
-                            if any(kw in s.lower() for kw in ["http", "discord", "api", "webhook"]):
-                                entry = {"source_file": f.name, "extracted_string": s}
-                                if entry not in self.results["deep_analysis"]["recovered_obfuscated_strings"]:
-                                    self.results["deep_analysis"]["recovered_obfuscated_strings"].append(entry)
-                    
+                                
+                        if len(current_string) >= 10:
+                            strings_found.append(current_string.decode('ascii', 'ignore'))
+
+                        if strings_found:
+                            # ---> O YARA ENTRA AQUI <---
+                            # Roda o YARA nas strings limpas que acabamos de desobfuscar!
+                            texto_limpo = " ".join(strings_found).encode('utf-8', 'ignore')
+                            self.run_yara_scan(texto_limpo)
+                            
+                            # 1. Alimenta o relatório geral com as strings mais críticas
+                            for s in strings_found:
+                                if any(kw in s.lower() for kw in ["http", "discord", "api", "webhook", "token", "leveldb"]):
+                                    entry = {"source_file": f.name, "extracted_string": s}
+                                    if entry not in self.results["deep_analysis"]["recovered_obfuscated_strings"]:
+                                        self.results["deep_analysis"]["recovered_obfuscated_strings"].append(entry)
+                            
+                            # 2. Transforma o arquivo inútil em um .json 100% legível com TODAS as strings
+                            json_dest = f.with_name(f.name + "_strings.json")
+                            with open(json_dest, 'w', encoding='utf-8') as jf:
+                                json.dump({"arquivo": f.name, "total_strings": len(strings_found), "strings": strings_found}, jf, indent=4)
+                            
+                            converted.append({"original": str(f.name), "convertido": str(json_dest.name), "tipo_detectado": "strings_extraidas_json"})
+                        
+                        # Ignora o resto das verificações e NÃO copia o arquivo .v8c ilegível
+                        continue
+
                     elif f.suffix.lower() == '.nqc':
                         kind = "javascript_disfarçado"
                         nova_extensao = ".js"
@@ -905,6 +921,7 @@ class SafeVectorAnalyzer:
             elif escolha == '4':
                 if can_extract_7z:
                     self.analyze_installer_pipeline()
+                    self._compute_suspicion_score()
                     self.save_report()
                 else:
                     console.print("[red][-] O artefato não requer desempacotamento de archives.[/red]")
