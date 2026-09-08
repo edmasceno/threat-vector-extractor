@@ -37,3 +37,7 @@ To ensure the framework utilizes 100% of its extraction capabilities, make sure 
 **Python Dependencies:**
 ```bash
 pip install requests yara-python pefile rich
+
+---
+
+“Use this script responsibly!”
