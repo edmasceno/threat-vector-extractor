@@ -2,7 +2,9 @@
 
 **Vector Analyzer** is an automated Python framework designed for rapid static triage, extraction of Indicators of Compromise (IoCs), and tactical capability analysis of suspicious artifacts and malicious installers.
 
-> **Note:** This is my **first custom-built malware static analysis script/framework**, created to automate triage workflows, deepen my knowledge in reverse engineering, and reduce Analyst Fatigue when dealing with complex obfuscated payloads (such as Electron/Node.js stealers and Java-based threats).
+> **Note:** This is my **first custom-built malware static analysis script/framework**, created to automate triage workflows, deepen my knowledge in reverse engineering, and reduce Analyst Fatigue when dealing with complex obfuscated payloads (such as Electron/Node.js stealers and Java-based threats). 
+
+“Use this script responsibly!"
 
 ---
 
@@ -34,10 +36,10 @@ To ensure the framework utilizes 100% of its extraction capabilities, make sure 
 *   [JADX](https://github.com/skylot/jadx)
 *   [Mandiant CAPA](https://github.com/mandiant/capa)
 
+
 **Python Dependencies:**
 ```bash
 pip install requests yara-python pefile rich```
 
----
 
-“Use this script responsibly!”"
+
