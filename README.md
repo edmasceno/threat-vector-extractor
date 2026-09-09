@@ -56,5 +56,5 @@ pip install requests yara-python pefile rich
 
 ```bash
 # Run the analyzer against a suspicious artifact
-python vector_malware.py path/to/suspicious_installer.exe
+python analyzer.py path/to/suspicious_installer.exe
 ```
