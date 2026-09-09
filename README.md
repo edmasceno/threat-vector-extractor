@@ -49,10 +49,12 @@ To ensure the framework utilizes 100% of its extraction and analysis capabilitie
 
 **Python Dependencies:**
 ```bash
-pip install requests yara-python pefile rich```
-
-
+pip install requests yara-python pefile rich
+```
 
 ## 💻 Quick Start
+
+```bash
 # Run the analyzer against a suspicious artifact
-python analyzer.py path/to/suspicious_installer.exe
+python vector_malware.py path/to/suspicious_installer.exe
+```
