@@ -49,7 +49,7 @@ To ensure the framework utilizes 100% of its extraction and analysis capabilitie
 
 **Python Dependencies:**
 ```bash
-pip install requests yara-python pefile rich
+pip install requests yara-python pefile rich```
 
 
 
