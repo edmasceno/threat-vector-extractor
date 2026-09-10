@@ -52,11 +52,17 @@ except ImportError:
     console = DummyConsole()
     Prompt = DummyPrompt()
 
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+
 # ============================================================
 # CONFIGURAÇÕES GERAIS E LIMITES
 # ============================================================
-# Recomenda-se exportar a variável de ambiente VT_API_KEY no sistema.
 VT_API_KEY = os.environ.get("VT_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 MAX_FILE_READ_BYTES = 200 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
@@ -457,7 +463,6 @@ class SafeVectorAnalyzer:
                     self.results["deep_analysis"]["possible_base64_blobs"]["samples"].append(truncated)
 
     def extract_network_iocs(self, data):
-        # Whitelist de domínios benignos para redução de falsos positivos
         whitelist_urls = [b'w3.org', b'schemas.microsoft.com', b'xml.org', b'apache.org']
         whitelist_ips = [b'0.0.0.0', b'1.0.0.0', b'6.0.0.0']
 
@@ -665,7 +670,6 @@ class SafeVectorAnalyzer:
         self.interactive_menu()
 
     def save_report(self):
-        # Remove nó deep_analysis se vazio para otimizar ingestão no SIEM
         if not any(self.results["deep_analysis"].values()):
             self.results.pop("deep_analysis", None)
 
@@ -730,70 +734,78 @@ class SafeVectorAnalyzer:
     def find_and_convert_unusual_modules(self, root_dir):
         converted = []
         for f in Path(root_dir).rglob("*"):
-            if f.is_file() and f.suffix.lower() not in COMMON_KNOWN_EXTENSIONS:
-                try:
-                    data = f.read_bytes()
-                    kind = None
-                    nova_extensao = None
+            if f.is_file():
+                
+                # 1. Nova Verificação: Identifica Explicitamente Scripts Maliciosos Embutidos (real.py, etc)
+                if f.suffix.lower() in ['.py', '.bat', '.ps1', '.vbs', '.cmd']:
+                    self.results["threat_intel"]["is_suspected_vector"] = True
+                    try:
+                        self.run_yara_scan(f.read_bytes())
+                    except Exception: pass
                     
-                    # Identificação de V8 Bytenode via assinatura binária
-                    if len(data) > 4 and data[2:4] == b'\xde\xc0':
-                        self.results["threat_intel"]["is_suspected_vector"] = True
+                    c = {"original": str(f.name), "convertido": str(f.name), "tipo_detectado": f"script_secundario_{f.suffix.lower().strip('.')}"}
+                    if c not in self.results["deep_analysis"]["installer_analysis"]["converted_modules"]:
+                        self.results["deep_analysis"]["installer_analysis"]["converted_modules"].append(c)
+                    continue
+
+                # 2. Continua com a busca por V8 Bytenode (.nqc) e módulos estranhos
+                if f.suffix.lower() not in COMMON_KNOWN_EXTENSIONS:
+                    try:
+                        data = f.read_bytes()
+                        kind = None
+                        nova_extensao = None
                         
-                        # Extração bruta de strings legíveis para hunting de IoCs
-                        printable = set(string.printable.encode('ascii'))
-                        strings_found = []
-                        current_string = bytearray()
-                        
-                        for byte in data:
-                            if byte in printable:
-                                current_string.append(byte)
-                            else:
-                                if len(current_string) >= 10:
-                                    strings_found.append(current_string.decode('ascii', 'ignore'))
-                                current_string = bytearray()
+                        if len(data) > 4 and data[2:4] == b'\xde\xc0':
+                            self.results["threat_intel"]["is_suspected_vector"] = True
+                            
+                            printable = set(string.printable.encode('ascii'))
+                            strings_found = []
+                            current_string = bytearray()
+                            
+                            for byte in data:
+                                if byte in printable:
+                                    current_string.append(byte)
+                                else:
+                                    if len(current_string) >= 10:
+                                        strings_found.append(current_string.decode('ascii', 'ignore'))
+                                    current_string = bytearray()
+                                    
+                            if len(current_string) >= 10:
+                                strings_found.append(current_string.decode('ascii', 'ignore'))
+
+                            if strings_found:
+                                texto_limpo = " ".join(strings_found).encode('utf-8', 'ignore')
+                                self.run_yara_scan(texto_limpo)
                                 
-                        if len(current_string) >= 10:
-                            strings_found.append(current_string.decode('ascii', 'ignore'))
+                                for s in strings_found:
+                                    if any(kw in s.lower() for kw in ["http", "discord", "api", "webhook", "token", "leveldb", "lsass", "dpapi"]):
+                                        entry = {"source_file": f.name, "extracted_string": s}
+                                        if entry not in self.results["deep_analysis"]["recovered_obfuscated_strings"]:
+                                            self.results["deep_analysis"]["recovered_obfuscated_strings"].append(entry)
+                                
+                                json_dest = f.with_name(f.name + "_strings.json")
+                                with open(json_dest, 'w', encoding='utf-8') as jf:
+                                    json.dump({"arquivo": f.name, "total_strings": len(strings_found), "strings": strings_found}, jf, indent=4)
+                                
+                                converted.append({"original": str(f.name), "convertido": str(json_dest.name), "tipo_detectado": "strings_extraidas_json"})
+                            
+                            continue
 
-                        if strings_found:
-                            # ---> O YARA ENTRA AQUI <---
-                            # Roda o YARA nas strings limpas que acabamos de desobfuscar!
-                            texto_limpo = " ".join(strings_found).encode('utf-8', 'ignore')
-                            self.run_yara_scan(texto_limpo)
-                            
-                            # 1. Alimenta o relatório geral com as strings mais críticas
-                            for s in strings_found:
-                                if any(kw in s.lower() for kw in ["http", "discord", "api", "webhook", "token", "leveldb"]):
-                                    entry = {"source_file": f.name, "extracted_string": s}
-                                    if entry not in self.results["deep_analysis"]["recovered_obfuscated_strings"]:
-                                        self.results["deep_analysis"]["recovered_obfuscated_strings"].append(entry)
-                            
-                            # 2. Transforma o arquivo inútil em um .json 100% legível com TODAS as strings
-                            json_dest = f.with_name(f.name + "_strings.json")
-                            with open(json_dest, 'w', encoding='utf-8') as jf:
-                                json.dump({"arquivo": f.name, "total_strings": len(strings_found), "strings": strings_found}, jf, indent=4)
-                            
-                            converted.append({"original": str(f.name), "convertido": str(json_dest.name), "tipo_detectado": "strings_extraidas_json"})
+                        elif f.suffix.lower() == '.nqc':
+                            kind = "javascript_disfarçado"
+                            nova_extensao = ".js"
+                        elif data.strip().startswith(b'{'):
+                            kind = "json"
+                            nova_extensao = ".json"
+                        elif sum(1 for b in data[:8192] if 32 <= b < 127)/8192 > 0.85:
+                            kind = "text"
+                            nova_extensao = ".txt"
                         
-                        # Ignora o resto das verificações e NÃO copia o arquivo .v8c ilegível
-                        continue
-
-                    elif f.suffix.lower() == '.nqc':
-                        kind = "javascript_disfarçado"
-                        nova_extensao = ".js"
-                    elif data.strip().startswith(b'{'):
-                        kind = "json"
-                        nova_extensao = ".json"
-                    elif sum(1 for b in data[:8192] if 32 <= b < 127)/8192 > 0.85:
-                        kind = "text"
-                        nova_extensao = ".txt"
-                    
-                    if kind:
-                        dest = f.with_name(f.name + nova_extensao)
-                        shutil.copy2(f, dest)
-                        converted.append({"original": str(f.name), "convertido": str(dest.name), "tipo_detectado": kind})
-                except Exception: pass
+                        if kind:
+                            dest = f.with_name(f.name + nova_extensao)
+                            shutil.copy2(f, dest)
+                            converted.append({"original": str(f.name), "convertido": str(dest.name), "tipo_detectado": kind})
+                    except Exception: pass
         
         for c in converted:
             if c not in self.results["deep_analysis"]["installer_analysis"]["converted_modules"]:
@@ -833,6 +845,127 @@ class SafeVectorAnalyzer:
             self.save_report()
         except Exception as e: pass
 
+    def generate_ai_summary(self):
+        if not GENAI_AVAILABLE:
+            console.print("[red][-] Biblioteca 'google-generativeai' não instalada. Use: pip install google-generativeai[/red]")
+            return
+        if not GEMINI_API_KEY:
+            console.print("[red][-] Chave GEMINI_API_KEY não configurada no ambiente.[/red]")
+            return
+
+        console.print("\n[cyan][*] Orquestrando Motor de IA (Gemini 3.6) para Geração de JSON Tático...[/cyan]")
+        
+        ti = self.results.get("threat_intel", {})
+        fi = self.results.get("file_info", {})
+        cap = self.results.get("capabilities", {})
+        deep_inst = self.results.get("deep_analysis", {}).get("installer_analysis", {})
+        
+        yara_rules = [y.get('rule_name') for y in ti.get('yara_matches', [])] if ti.get('yara_matches') else []
+        
+        extraction_dir = deep_inst.get("extraction_dir")
+        arquivos_criticos_conteudo = ""
+        
+        if extraction_dir and os.path.exists(extraction_dir):
+            console.print("[dim][*] Extraindo inteligência do disco (Lendo .py e .json internos)...[/dim]")
+            base_path = Path(extraction_dir)
+            
+            for file_path in base_path.rglob("*"):
+                if file_path.is_file():
+                    if file_path.suffix == '.py' or file_path.name.endswith('_strings.json'):
+                        try:
+                            conteudo_bruto = file_path.read_text(encoding='utf-8', errors='ignore')
+                            if file_path.name.endswith('_strings.json'):
+                                try:
+                                    json_data = json.loads(conteudo_bruto)
+                                    strings_list = json_data.get("strings", [])
+                                    relevantes = [s for s in strings_list if any(k in s.lower() for k in ['http', 'api', 'webhook', 'token', 'login', 'pass', 'discord', 'wallet', 'crypto', 'c:\\'])]
+                                    conteudo = "\n".join(relevantes[:30]) 
+                                except:
+                                    conteudo = conteudo_bruto[:1500]
+                            else:
+                                conteudo = conteudo_bruto[:2000] + "\n[... código truncado ...]"
+                                
+                            if conteudo.strip():
+                                arquivos_criticos_conteudo += f"\n--- Arquivo: {file_path.name} ---\n{conteudo}\n"
+                        except Exception as e:
+                            pass
+                            
+        arquivos_criticos_conteudo = arquivos_criticos_conteudo[:15000]
+
+        prompt = f"""
+        Você é uma API de Cyber Threat Intelligence (CTI).
+        Analise o artefato malicioso abaixo e retorne APENAS um objeto JSON válido, sem formatação markdown (sem ```json).
+        
+        METADADOS GERAIS (Telemetria Bruta):
+        - Tipo: {fi.get('file_type')}
+        - Vetor de Empacotamento: {deep_inst.get('installer_type', 'N/A')}
+        - Score Estático: {ti.get('suspicion_score')}
+        - Regras YARA: {', '.join(yara_rules) if yara_rules else 'Nenhuma'}
+        
+        CONTEÚDO PROFUNDO:
+        {arquivos_criticos_conteudo if arquivos_criticos_conteudo else 'Nenhum.'}
+        
+        O JSON de resposta DEVE ter estritamente a seguinte estrutura:
+        {{
+            "ai_threat_intelligence": {{
+                "risk_level": "BAIXO, MEDIO, ALTO ou CRITICO",
+                "malware_family": "Nome deduzido (ex: Rain Stealer)",
+                "classification": "Categoria (ex: InfoStealer)",
+                "primary_targets": ["Alvo 1", "Alvo 2"]
+            }},
+            "tactics_and_techniques": ["Técnica 1", "Técnica 2"],
+            "soc_playbook": {{
+                "containment_actions": ["Ação 1", "Ação 2"],
+                "eradication_actions": ["Ação 1", "Ação 2"]
+            }},
+            "executive_summary": "Resumo da ameaça em texto"
+        }}
+        """
+
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-3.6-flash')
+            response = model.generate_content(prompt)
+            
+            # Limpa o texto caso a IA tente ser "amigável" e mandar formatação
+            json_text = response.text.strip()
+            if json_text.startswith("```json"):
+                json_text = json_text[7:]
+            if json_text.endswith("```"):
+                json_text = json_text[:-3]
+            json_text = json_text.strip()
+
+            try:
+                ai_report_data = json.loads(json_text)
+                
+                # Salvar o SEGUNDO relatorio JSON
+                ai_report_path = self.file_path.parent / f"{self.file_path.stem}_ai_report.json"
+                with open(ai_report_path, 'w', encoding='utf-8') as f:
+                    json.dump(ai_report_data, f, indent=4, ensure_ascii=False)
+                
+                console.print("\n")
+                console.print(Panel(
+                    f"[bold red]Nível de Risco (AI):[/bold red] {ai_report_data['ai_threat_intelligence']['risk_level']}\n"
+                    f"[bold yellow]Família/Tipo:[/bold yellow] {ai_report_data['ai_threat_intelligence']['malware_family']} ({ai_report_data['ai_threat_intelligence']['classification']})\n\n"
+                    f"[bold cyan]Resumo Executivo:[/bold cyan]\n{ai_report_data['executive_summary']}\n\n"
+                    f"[green][+] Relatório AI salvo em: {ai_report_path.name}[/green]", 
+                    title="[bold magenta]🤖 JSON AI Engine Gerado com Sucesso[/bold magenta]", border_style="magenta", expand=False
+                ))
+
+                # Atualiza o JSON principal se a IA disser que é muito perigoso
+                risk = ai_report_data['ai_threat_intelligence']['risk_level'].upper()
+                if risk in ['ALTO', 'CRÍTICO', 'CRITICO']:
+                    self.results["threat_intel"]["suspicion_level"] = risk
+                    self.results["threat_intel"]["suspicion_score"] = max(self.results["threat_intel"]["suspicion_score"], 10)
+                    self.save_report()
+                    
+            except json.JSONDecodeError:
+                console.print("[red][-] A IA não retornou um JSON válido. Resposta pura recebida:[/red]")
+                console.print(response.text)
+            
+        except Exception as e:
+            console.print(f"[red][-] Falha na integração com a IA: {e}[/red]")
+
     def interactive_menu(self):
         while True:
             os.system('cls' if os.name == 'nt' else 'clear')
@@ -861,7 +994,9 @@ class SafeVectorAnalyzer:
             if fi["is_packed"]:
                 console.print("\n[on red][bold white] ALERT [/bold white][/on red] [red]Entropia anômala detectada (> 7.2). Possível packer/cryptor presente.[/red]")
             if ti['yara_matches']:
-                console.print(f"[on red][bold white] YARA [/bold white][/on red] [red]Assinaturas correspondentes:[/red] {', '.join([m['rule_name'] for m in ti['yara_matches']])}")
+                try:
+                    console.print(f"[on red][bold white] YARA [/bold white][/on red] [red]Assinaturas correspondentes:[/red] {', '.join([m['rule_name'] if isinstance(m, dict) else m.rule for m in ti['yara_matches']])}")
+                except Exception: pass
             if self.results["capabilities"]["mitre_attack_tactics"]:
                 console.print(f"[on yellow][bold black] MITRE [/bold black][/on yellow] [yellow]{len(self.results['capabilities']['mitre_attack_tactics'])} táticas operacionais mapeadas.[/yellow]")
 
@@ -881,11 +1016,14 @@ class SafeVectorAnalyzer:
             menu.add_row("3", "Reversing Estático (Decompilação JADX)", "[yellow]Opcional[/yellow]" if can_jadx else "[dim]Inativo[/dim]")
             menu.add_row("4", "Desempacotamento Estrutural (Archive/Installer)", "[bold green]Recomendado[/bold green]" if can_extract_7z else "[dim]Inativo[/dim]")
             menu.add_row("5", "Integração MITRE ATT&CK (Mandiant CAPA)", "[bold yellow]Altamente Recomendado[/bold yellow]")
+            
+            status_ai = "[bold magenta]Pronto[/bold magenta]" if GEMINI_API_KEY else "[dim]Requer API Key[/dim]"
+            menu.add_row("6", "Síntese Tática Executiva (AI Engine)", status_ai)
             menu.add_row("0", "Finalizar Triagem", "")
 
             console.print(menu)
 
-            escolha = Prompt.ask("\n[bold cyan]Seleção de módulo[/bold cyan]", choices=["0", "1", "2", "3", "4", "5"], default="0")
+            escolha = Prompt.ask("\n[bold cyan]Seleção de módulo[/bold cyan]", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
             
             if escolha == '0':
                 console.print("[bold green]\n[+] Sessão de análise encerrada.[/bold green]")
@@ -928,6 +1066,9 @@ class SafeVectorAnalyzer:
                     
             elif escolha == '5':
                 self.run_capa()
+                
+            elif escolha == '6':
+                self.generate_ai_summary()
 
             console.input("\n[dim]Pressione ENTER para retornar ao painel central...[/dim]")
 
