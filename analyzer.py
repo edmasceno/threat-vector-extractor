@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import requests
 
+# Attempt to load optional but highly recommended dependencies
 try:
     import yara
     YARA_AVAILABLE = True
@@ -34,6 +35,7 @@ except ImportError:
     PEFILE_AVAILABLE = False
 
 try:
+    # We use Rich to build the interactive CLI dashboard
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
@@ -61,9 +63,11 @@ except ImportError:
 # ============================================================
 # GENERAL CONFIGURATION & LIMITS
 # ============================================================
+# API keys should be set via environment variables for OPSEC
 VT_API_KEY = os.environ.get("VT_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
+# Safeguards against memory exhaustion when handling massive payloads
 MAX_FILE_READ_BYTES = 200 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 MAX_ZIP_MEMBER_UNCOMPRESSED = 50 * 1024 * 1024
@@ -80,6 +84,7 @@ JADX_TIMEOUT = 120
 CAPA_TIMEOUT = 180
 YARA_RULES_DIR = "yara_rules"
 
+# Signatures for dynamic class loading, C2 comms, and Discord stealers
 SUSPICIOUS_CLASS_PATTERNS = [
     (rb'java/lang/Runtime', "Usage of java.lang.Runtime (possible command execution)"),
     (rb'ProcessBuilder', "Usage of ProcessBuilder (possible command execution)"),
@@ -150,6 +155,7 @@ class SSRFBlockedError(Exception):
     pass
 
 class PurePythonYaraEngine:
+    """Fallback YARA engine if the C-based yara-python library is missing"""
     def __init__(self, rules_dir):
         self.rules_dir = Path(rules_dir)
         self.rules = []
@@ -200,6 +206,7 @@ class PurePythonYaraEngine:
                 })
         return matched_rules
 
+
 class BlackAntAnalyzer:
     def __init__(self, file_path):
         self.file_path = Path(file_path)
@@ -207,6 +214,7 @@ class BlackAntAnalyzer:
         self.safe_download_dir = self.file_path.parent / "quarantine"
         self.jadx_output_dir = self.file_path.parent / f"{self.file_path.stem}_jadx_decompiled"
 
+        # Regex patterns for fast IoC scraping
         self.url_pattern = re.compile(rb'https?://[a-zA-Z0-9.-]+(?::\d+)?(?:/[^\s"\'\`<>\x00]*)?')
         self.ip_pattern = re.compile(rb'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::\d+)?\b')
         self.telegram_token_pattern = re.compile(rb'\b\d{8,10}:[A-Za-z0-9_-]{35}\b')
@@ -217,6 +225,7 @@ class BlackAntAnalyzer:
             re.compile(rb'\b0x[a-fA-F0-9]{40}\b'),
         ]
 
+        # Load previous analysis state if it exists, otherwise build a fresh CTI structure
         if self.report_path.exists():
             try:
                 with open(self.report_path, 'r', encoding='utf-8') as f:
@@ -295,6 +304,7 @@ class BlackAntAnalyzer:
         }
 
     def defang_indicator(self, indicator):
+        # Prevent accidental execution/navigation of malicious URLs
         return indicator.replace(".", "[.]").replace("http", "hxxp")
 
     def detect_file_type(self, data):
@@ -304,6 +314,7 @@ class BlackAntAnalyzer:
         return "Unknown / Raw Data"
 
     def _calculate_entropy(self, data):
+        # Used to detect packed or encrypted sections
         if not data: return 0
         entropy = 0
         for x in range(256):
@@ -345,6 +356,7 @@ class BlackAntAnalyzer:
         return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
 
     def _validate_url_for_ssrf(self, url):
+        # Basic SSRF protection before downloading external payloads
         parsed = urlparse(url)
         if parsed.scheme not in ALLOWED_SCHEMES: raise SSRFBlockedError(f"HTTP(S) scheme not allowed: {parsed.scheme}")
         if not parsed.hostname: raise SSRFBlockedError("URL without valid hostname")
@@ -372,6 +384,7 @@ class BlackAntAnalyzer:
                     self.results["file_info"]["is_packed"] = True
                     self.results["threat_intel"]["is_suspected_vector"] = True
             
+            # Map imported network APIs commonly used by droppers
             if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
                 for entry in pe.DIRECTORY_ENTRY_IMPORT:
                     dll = entry.dll.decode('utf-8', 'ignore').lower()
@@ -463,6 +476,7 @@ class BlackAntAnalyzer:
                     self.results["deep_analysis"]["possible_base64_blobs"]["samples"].append(truncated)
 
     def extract_network_iocs(self, data):
+        # Whitelists to reduce noise and false positives during extraction
         whitelist_urls = [b'w3.org', b'schemas.microsoft.com', b'xml.org', b'apache.org']
         whitelist_ips = [b'0.0.0.0', b'1.0.0.0', b'6.0.0.0']
 
@@ -571,6 +585,7 @@ class BlackAntAnalyzer:
         return sum(1 for b in data if 32 <= b < 127) / len(data) if data else 0.0
 
     def _brute_force_xor_array(self, values):
+        # Brute forces basic XOR obfuscation commonly found in malicious Java arrays
         best = None
         for key in range(MAX_XOR_KEY):
             for step in range(MAX_XOR_STEP):
@@ -654,6 +669,7 @@ class BlackAntAnalyzer:
         self.results["file_info"]["hashes"] = self.get_file_hashes(self._raw_data_cache)
         self.results["file_info"]["file_type"] = self.detect_file_type(self._raw_data_cache)
 
+        # Baseline checks on raw binary
         self.run_yara_scan(self._raw_data_cache)
         self.extract_network_iocs(self._raw_data_cache)
         self.detect_embedded_payloads(self._raw_data_cache)
@@ -661,8 +677,12 @@ class BlackAntAnalyzer:
         self.detect_embedded_archives_by_signature(self._raw_data_cache)
         self.scan_suspicious_content(self._raw_data_cache)
 
-        if "PE Executable" in self.results["file_info"]["file_type"]: self.analyze_pe()
-        elif "Compressed Archive" in self.results["file_info"]["file_type"]: self.analyze_archive()
+        # File-specific deep inspections
+        if "PE Executable" in self.results["file_info"]["file_type"]:
+            self.analyze_pe()
+            self.check_authenticode()
+        elif self.file_path.suffix.lower() == ".lnk":
+            self.parse_lnk_file()
 
         self.check_virustotal()
         self._compute_suspicion_score()
@@ -670,6 +690,7 @@ class BlackAntAnalyzer:
         self.interactive_menu()
 
     def save_report(self):
+        # Drop deep_analysis node if it's empty to keep the JSON clean for SIEM ingestion
         if not any(self.results["deep_analysis"].values()):
             self.results.pop("deep_analysis", None)
 
@@ -721,6 +742,7 @@ class BlackAntAnalyzer:
         except Exception: return False
 
     def recursive_extract_archives(self, root_dir, base_dir=None, depth=0):
+        # Unpacks nested archives (e.g. NSIS installers hiding .7z files which hide the payload)
         if depth > MAX_RECURSION_DEPTH: return
         for p in Path(root_dir).rglob("*"):
             if p.is_file() and p.suffix.lower() in ARCHIVE_EXTENSIONS:
@@ -732,11 +754,11 @@ class BlackAntAnalyzer:
                     self.recursive_extract_archives(dest_dir, base_dir=base_dir, depth=depth + 1)
 
     def find_and_convert_unusual_modules(self, root_dir):
+        # Hunts for known evasion patterns like Electron Stealers wrapped in V8 Bytenode (.nqc)
         converted = []
         for f in Path(root_dir).rglob("*"):
             if f.is_file():
                 
-                # 1. New Check: Explicitly Identify Embedded Malicious Scripts
                 if f.suffix.lower() in ['.py', '.bat', '.ps1', '.vbs', '.cmd']:
                     self.results["threat_intel"]["is_suspected_vector"] = True
                     try:
@@ -748,13 +770,13 @@ class BlackAntAnalyzer:
                         self.results["deep_analysis"]["installer_analysis"]["converted_modules"].append(c)
                     continue
 
-                # 2. Continue searching for V8 Bytenode (.nqc) and strange modules
                 if f.suffix.lower() not in COMMON_KNOWN_EXTENSIONS:
                     try:
                         data = f.read_bytes()
                         kind = None
                         new_extension = None
                         
+                        # V8 Bytenode magic header detection
                         if len(data) > 4 and data[2:4] == b'\xde\xc0':
                             self.results["threat_intel"]["is_suspected_vector"] = True
                             
@@ -846,6 +868,7 @@ class BlackAntAnalyzer:
         except Exception as e: pass
 
     def generate_ai_summary(self):
+        """AI-driven threat synthesis using Google Gemini"""
         if not GENAI_AVAILABLE:
             console.print("[red][-] 'google-generativeai' library not installed. Use: pip install google-generativeai[/red]")
             return
@@ -853,7 +876,7 @@ class BlackAntAnalyzer:
             console.print("[red][-] GEMINI_API_KEY not configured in the environment.[/red]")
             return
 
-        console.print("\n[cyan][*] Orchestrating AI Engine (Gemini 3.6) for Tactical JSON Generation...[/cyan]")
+        console.print("\n[cyan][*] Orchestrating AI Engine (Gemini) for Tactical JSON Generation...[/cyan]")
         
         ti = self.results.get("threat_intel", {})
         fi = self.results.get("file_info", {})
@@ -865,6 +888,7 @@ class BlackAntAnalyzer:
         extraction_dir = deep_inst.get("extraction_dir")
         critical_files_content = ""
         
+        # Read internal scripts to feed the AI prompt with deep context
         if extraction_dir and os.path.exists(extraction_dir):
             console.print("[dim][*] Extracting intelligence from disk (Reading internal .py and .json)...[/dim]")
             base_path = Path(extraction_dir)
@@ -925,7 +949,7 @@ class BlackAntAnalyzer:
 
         try:
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
             response = model.generate_content(prompt)
             
             # Clean text if the AI tries to send formatting
@@ -939,7 +963,7 @@ class BlackAntAnalyzer:
             try:
                 ai_report_data = json.loads(json_text)
                 
-                # Save the SECOND JSON report
+                # Save the SECOND JSON report (AI output)
                 ai_report_path = self.file_path.parent / f"{self.file_path.stem}_ai_report.json"
                 with open(ai_report_path, 'w', encoding='utf-8') as f:
                     json.dump(ai_report_data, f, indent=4, ensure_ascii=False)
@@ -953,7 +977,7 @@ class BlackAntAnalyzer:
                     title="[bold magenta]🤖 JSON AI Engine Successfully Generated[/bold magenta]", border_style="magenta", expand=False
                 ))
 
-                # Update main JSON if AI considers it highly dangerous
+                # Dynamically update the main JSON severity if AI flags it as highly dangerous
                 risk = ai_report_data['ai_threat_intelligence']['risk_level'].upper()
                 if risk in ['HIGH', 'CRITICAL']:
                     self.results["threat_intel"]["suspicion_level"] = risk
@@ -966,6 +990,71 @@ class BlackAntAnalyzer:
             
         except Exception as e:
             console.print(f"[red][-] Integration with AI failed: {e}[/red]")
+
+    def check_authenticode(self):
+        """Digital signature validation (Authenticode)"""
+        if not PEFILE_AVAILABLE or not self._raw_data_cache.startswith(b'MZ'):
+            return
+
+        try:
+            pe = pefile.PE(data=self._raw_data_cache, fast_load=True)
+            security_dir = pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_SECURITY']
+            sig_address = pe.OPTIONAL_HEADER.DATA_DIRECTORY[security_dir].VirtualAddress
+            sig_size = pe.OPTIONAL_HEADER.DATA_DIRECTORY[security_dir].Size
+
+            has_signature = sig_address != 0 and sig_size > 0
+            self.results["deep_analysis"]["pe_analysis"]["digital_signature"] = {
+                "signed": has_signature,
+                "cert_table_address": hex(sig_address),
+                "cert_size": sig_size
+            }
+
+            if not has_signature:
+                self.results["threat_intel"]["warnings"].append("Executável não assinado digitalmente (Sem Authenticode).")
+        except Exception as e:
+            self.results["threat_intel"]["warnings"].append(f"Falha ao validar Authenticode: {e}")
+
+    def parse_lnk_file(self):
+        """Initial Access parser: extracts hidden arguments and destinations in .lnk shortcuts"""
+        if self.file_path.suffix.lower() != ".lnk":
+            return
+
+        self.results["file_info"]["file_type"] = "Windows Shortcut (.lnk)"
+        data = self._raw_data_cache
+
+        # Scrape readable strings (ASCII and UTF-16LE commonly found in ShellLink structures)
+        ascii_strings = re.findall(rb'[\x20-\x7E]{4,}', data)
+        unicode_strings = [m.decode('utf-16le', 'ignore') for m in re.findall(rb'(?:[\x20-\x7E]\x00){4,}', data)]
+        decoded_ascii = [s.decode('ascii', 'ignore') for s in ascii_strings]
+
+        combined = " ".join(decoded_ascii + unicode_strings)
+
+        # Look for interpreters often abused in initial access campaigns
+        suspicious_terms = ["powershell", "cmd.exe", "mshta", "cscript", "wscript", "rundll32", "regsvr32", "http", "ftp"]
+        found_commands = [term for term in suspicious_terms if term in combined.lower()]
+
+        if found_commands:
+            self.results["threat_intel"]["is_suspected_vector"] = True
+            self.results["capabilities"]["mitre_attack_tactics"].append("Execution: Command and Scripting Interpreter [T1059]")
+            self.results["threat_intel"]["warnings"].append(f"Atalho .LNK contém comandos interpretados: {', '.join(set(found_commands))}")
+
+    def run_floss(self):
+        """Mandiant FLOSS wrapper to recover advanced obfuscated stack strings"""
+        floss_path = shutil.which("floss")
+        if not floss_path:
+            console.print("[red][-] Mandiant FLOSS não localizado no PATH do sistema.[/red]")
+            return
+
+        console.print("[cyan][*] Executando Mandiant FLOSS (Desofuscação de Stack Strings)...[/cyan]")
+        try:
+            result = subprocess.run([floss_path, "--quiet", str(self.file_path.resolve())], capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and result.stdout:
+                extracted = [line.strip() for line in result.stdout.splitlines() if len(line.strip()) > 6]
+                self.results["deep_analysis"]["floss_strings"] = extracted[:50]
+                console.print(f"[green][+] FLOSS finalizado: {len(extracted)} strings recuperadas.[/green]")
+                self.save_report()
+        except Exception as e:
+            console.print(f"[red][-] Erro na execução do FLOSS: {e}[/red]")
 
     def interactive_menu(self):
         while True:
@@ -1020,11 +1109,12 @@ class BlackAntAnalyzer:
             
             status_ai = "[bold magenta]Ready[/bold magenta]" if GEMINI_API_KEY else "[dim]Requires API Key[/dim]"
             menu.add_row("6", "Executive Tactical Synthesis (AI Engine)", status_ai)
+            menu.add_row("7", "Obfuscated String Recovery (Mandiant FLOSS)", "[green]Available[/green]" if shutil.which("floss") else "[dim]Inactive[/dim]")
             menu.add_row("0", "Exit Triage", "")
 
             console.print(menu)
 
-            choice = Prompt.ask("\n[bold cyan]Module selection[/bold cyan]", choices=["0", "1", "2", "3", "4", "5", "6"], default="0")
+            choice = Prompt.ask("\n[bold cyan]Module selection[/bold cyan]", choices=["0", "1", "2", "3", "4", "5", "6", "7"], default="0")
             
             if choice == '0':
                 console.print("[bold green]\n[+] Analysis session closed.[/bold green]")
@@ -1070,6 +1160,9 @@ class BlackAntAnalyzer:
                 
             elif choice == '6':
                 self.generate_ai_summary()
+                
+            elif choice == '7':
+                self.run_floss()
 
             console.input("\n[dim]Press ENTER to return to the central dashboard...[/dim]")
 
