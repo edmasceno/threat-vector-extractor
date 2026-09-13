@@ -1,6 +1,6 @@
-# Vector Analyzer 🦠🔍
+# Black Ant 🐜🔍
 
-**Vector Analyzer** is an automated Python framework designed for rapid static triage, Indicator of Compromise (IoC) extraction, and tactical capability analysis of suspicious artifacts and malicious installers. 
+**Black Ant** is an automated Python framework designed for rapid static triage, Indicator of Compromise (IoC) extraction, and tactical capability analysis of suspicious artifacts and malicious installers. 
 
 > **Note:** This is my primary **Detection Engineering and Malware Analysis framework**, built to automate triage workflows, deepen my knowledge in reverse engineering, and reduce *Analyst Fatigue* when dealing with complex, obfuscated payloads (such as modern Electron/Node.js stealers and Java-based threats).
 
@@ -19,7 +19,7 @@
 
 ## 🎯 Detection Capabilities & CTI
 
-Vector Analyzer comes with a suite of custom YARA rules developed through active *in-the-wild* malware reverse engineering. Current detection capabilities include:
+Black Ant comes with a suite of custom YARA rules developed through active *in-the-wild* malware reverse engineering. Current detection capabilities include:
 
 *   **Modular Infostealers:** Signatures targeting Electron/Node.js stealers, detecting C2 infrastructure, global configuration variables, and exfiltration API endpoints.
 *   **Advanced Evasion Techniques:** Detection of anti-VM and anti-debugging mechanisms, such as WMI hardware enumeration, sandbox process blacklisting, and output suppression.
