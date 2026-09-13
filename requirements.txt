@@ -1,0 +1,14 @@
+# HTTP requests (VirusTotal API and safe payload retrieval)
+requests>=2.31.0
+
+# PE binary parsing and static analysis
+pefile>=2023.2.7
+
+# YARA signature matching engine
+yara-python>=4.5.0
+
+# Terminal UI, tables, and rich console output
+rich>=13.7.0
+
+# Google Gemini AI engine integration
+google-generativeai>=0.8.0
