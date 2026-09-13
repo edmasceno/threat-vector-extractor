@@ -1078,4 +1078,4 @@ if __name__ == "__main__":
         analyzer = SafeVectorAnalyzer(sys.argv[1])
         analyzer.run_analysis()
     else:
-        print("Uso: python vector_malware.py <arquivo_suspeito>")
+        print("Use: python analyzer.py <arquivo_suspeito>")
