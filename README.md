@@ -2,7 +2,7 @@
 
 **Black Ant** is an automated Python framework designed for rapid static triage, Indicator of Compromise (IoC) extraction, and tactical capability analysis of suspicious artifacts and malicious installers. 
 
-> **Note:** This is my primary **Detection Engineering and Malware Analysis framework**, built to automate triage workflows, deepen my knowledge in reverse engineering, and reduce *Analyst Fatigue* when dealing with complex, obfuscated payloads (such as modern Electron/Node.js stealers and Java-based threats).
+> **Note:** This is my first Detection Engineering and Malware Analysis framework, built to automate triage workflows, deepen my knowledge in reverse engineering, and reduce Analyst Fatigue when dealing with complex, obfuscated payloads (such as modern Electron/Node.js stealers and Java-based threats).
 
 ---
 
